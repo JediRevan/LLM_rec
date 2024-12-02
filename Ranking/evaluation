@@ -1,0 +1,64 @@
+from sklearn.metrics import mean_squared_error
+import numpy as np
+
+# 预测得分
+y_pred_proba = lr_model.predict_proba(val_features)[:, 1]  # 获取预测概率
+y_pred_ranking = np.argsort(-y_pred_proba)  # 按预测分数降序排序
+
+# 创建验证集用户和商品的对应关系
+val_users = X_val_split["user_id"].values  # 假设用户 ID 列为 'user_id'
+val_items = X_val_split["item_id"].values  # 假设商品 ID 列为 'item_id'
+y_val_true = y_val_split.values  # 验证集的真实标签（如 rating 是否为高分）
+
+# 构造结果字典 {用户: [(item, true_label, pred_score)]}
+results = {}
+for user, item, true_label, pred_score in zip(val_users, val_items, y_val_true, y_pred_proba):
+    if user not in results:
+        results[user] = []
+    results[user].append((item, true_label, pred_score))
+
+# 排序每个用户的商品列表，按预测分数降序
+for user in results:
+    results[user] = sorted(results[user], key=lambda x: x[2], reverse=True)
+
+# 计算 Recall@K 和 NDCG@K
+def calculate_recall_and_ndcg(results, k=10):
+    recall_list = []
+    ndcg_list = []
+
+    for user, items in results.items():
+        # 获取实际相关的商品
+        relevant_items = [item for item, label, _ in items if label > 3]  # 假设评分 > 3 表示相关
+        recommended_items = [item for item, _, _ in items[:k]]  # 推荐的 Top-K 商品
+
+        # Recall@K
+        num_relevant_and_recommended = len(set(relevant_items) & set(recommended_items))
+        recall = num_relevant_and_recommended / len(relevant_items) if len(relevant_items) > 0 else 0
+        recall_list.append(recall)
+
+        # NDCG@K
+        dcg = sum([1 / np.log2(idx + 2) for idx, (item, label, _) in enumerate(items[:k]) if label > 3])
+        idcg = sum([1 / np.log2(idx + 2) for idx in range(min(len(relevant_items), k))])
+        ndcg = dcg / idcg if idcg > 0 else 0
+        ndcg_list.append(ndcg)
+
+    avg_recall = np.mean(recall_list)
+    avg_ndcg = np.mean(ndcg_list)
+
+    return avg_recall, avg_ndcg
+
+# 计算指标
+recall_at_10, ndcg_at_10 = calculate_recall_and_ndcg(results, k=10)
+print(f"Recall@10: {recall_at_10}")
+print(f"NDCG@10: {ndcg_at_10}")
+
+# 测试集预测
+X_test_processed, _, _ = preprocess_features(
+    X_test, user_binary_cols, user_num_cols, user_class_cols, 
+    item_binary_cols, item_num_cols, item_class_cols
+)
+
+test_features = sp.hstack((leaf_encoder.transform(gbdt_model.predict(X_test_processed, pred_leaf=True)), 
+                           X_test_processed))
+
+y_test_pred_proba = lr_model.predict_proba(test_features)[:, 1]
